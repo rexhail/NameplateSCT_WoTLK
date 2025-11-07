@@ -636,12 +636,8 @@ function NameplateSCT:DamageEvent(guid, spellName, amount, overkill, school, cri
 		end
 	end
 
-	-- color text
-	if (overkill > 0) then
-		text = text.." Overkill("..overkill..")"
-	end
-
-	text = self:ColorText(text, guid, playerGUID, school, spellName, heals)
+-- color text (overkill highlighting handled in DisplayText/DisplayTextOverkill)
+text = self:ColorText(text, guid, playerGUID, school, spellName, heals)
 
 	-- shrink small hits
 	if (self.db.global.sizing.smallHits or self.db.global.sizing.smallHitsHide) and playerGUID ~= guid then
