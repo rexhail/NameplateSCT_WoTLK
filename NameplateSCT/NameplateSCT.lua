@@ -25,6 +25,7 @@ local tinsert, tremove = table.insert, table.remove
 ------------
 local _
 local animating = {}
+local guidToPlate = {}
 
 local playerGUID
 
@@ -284,6 +285,7 @@ local function recycleFontString(fontString)
 	fontString.animatingDuration = nil
 	fontString.animatingStartTime = nil
 	fontString.anchorFrame = nil
+	fontString.anchorPlate = nil
 
 	fontString.guid = nil
 
@@ -312,7 +314,31 @@ local function recycleFontString(fontString)
 	end
 	fontString:ClearAllPoints()
 
+	local holder = fontString:GetParent()
+	if holder then
+		holder:ClearAllPoints()
+		holder:SetParent(UIParent)
+	end
+
 	tinsert(fontStringCache, fontString)
+end
+
+local function releasePlateFontStrings(plate)
+	if not plate then
+		return
+	end
+
+	local toRecycle = {}
+	for fontString in pairs(animating) do
+		local holder = fontString:GetParent()
+		if holder and holder:GetParent() == plate then
+			tinsert(toRecycle, fontString)
+		end
+	end
+
+	for _, fontString in ipairs(toRecycle) do
+		recycleFontString(fontString)
+	end
 end
 
 ----------------
@@ -353,6 +379,9 @@ end
 function NameplateSCT:OnEnable()
 	playerGUID = UnitGUID("player")
 	self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+	self:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+	self:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+	self:RegisterEvent("PLAYER_REGEN_ENABLED")
 	self.db.global.enabled = true
 	AutoAttack = AutoAttack or GetSpellInfo(6603)
 	AutoShot = AutoShot or GetSpellInfo(75)
@@ -363,7 +392,42 @@ function NameplateSCT:OnDisable()
 	for fontString, _ in pairs(animating) do
 		recycleFontString(fontString)
 	end
+	for guid in pairs(guidToPlate) do
+		guidToPlate[guid] = nil
+	end
 	self.db.global.enabled = false
+end
+
+function NameplateSCT:NAME_PLATE_UNIT_ADDED(_, unit)
+	local guid = UnitGUID(unit)
+	local plate = C_NamePlate.GetNamePlateForUnit(unit)
+
+	if guid and plate then
+		guidToPlate[guid] = plate
+	end
+end
+
+function NameplateSCT:NAME_PLATE_UNIT_REMOVED(_, unit)
+	local guid = UnitGUID(unit)
+
+	if guid then
+		local plate = guidToPlate[guid]
+		if plate then
+			releasePlateFontStrings(plate)
+		end
+		guidToPlate[guid] = nil
+	end
+end
+
+function NameplateSCT:PLAYER_REGEN_ENABLED()
+	local toRecycle = {}
+	for fontString in pairs(animating) do
+		tinsert(toRecycle, fontString)
+	end
+
+	for _, fontString in ipairs(toRecycle) do
+		recycleFontString(fontString)
+	end
 end
 
 ---------------
@@ -462,12 +526,12 @@ local function AnimationOnUpdate()
 					yOffset = yOffset + fontString.rainfallStartY
 				end
 
-				if fontString.anchorFrame and fontString.anchorFrame:IsShown() then
-					if fontString.guid == playerGUID then -- player frame
-						fontString:SetPoint("CENTER", fontString.anchorFrame, "CENTER", NameplateSCT.db.global.xOffsetPersonal + xOffset, NameplateSCT.db.global.yOffsetPersonal + yOffset)
-					else
-						fontString:SetPoint("CENTER", fontString.anchorFrame, "CENTER", NameplateSCT.db.global.xOffset + xOffset, NameplateSCT.db.global.yOffset + yOffset)
-					end
+				local anchorFrame = fontString.anchorFrame
+				local anchorPlate = fontString.anchorPlate
+				if anchorPlate and anchorPlate.IsShown and not anchorPlate:IsShown() then
+					recycleFontString(fontString)
+				elseif anchorFrame and anchorFrame:IsShown() then
+					fontString:SetPoint("CENTER", anchorFrame, "CENTER", xOffset, yOffset)
 				else
 					recycleFontString(fontString)
 				end
@@ -485,7 +549,7 @@ function NameplateSCT:Animate(fontString, anchorFrame, duration, animation)
 	fontString.animation = animation
 	fontString.animatingDuration = duration
 	fontString.animatingStartTime = GetTime()
-	fontString.anchorFrame = anchorFrame == "player" and UIParent or anchorFrame
+	fontString.anchorFrame = anchorFrame
 
 	if animation == "verticalUp" then
 		fontString.distance = ANIMATION_VERTICAL_DISTANCE
@@ -541,32 +605,38 @@ local BITMASK_PETS = COMBATLOG_OBJECT_TYPE_PET + COMBATLOG_OBJECT_TYPE_GUARDIAN
 local BITMASK_MINE = COMBATLOG_OBJECT_AFFILIATION_MINE or 0x00000001
 
 function NameplateSCT:COMBAT_LOG_EVENT_UNFILTERED(_, _, clueevent, srcGUID, srcName, srcFlags, dstGUID, dstName, _, ...)
-	if self.db.global.personalOnly and self.db.global.personal and playerGUID ~= dstGUID then
-		return
-	end -- Cancel out any non player targetted abilities if you have personalSCT only enabled
+        if self.db.global.personalOnly and self.db.global.personal and playerGUID ~= dstGUID then
+                return
+        end -- Cancel out any non player targetted abilities if you have personalSCT only enabled
 
-	if playerGUID == srcGUID or (self.db.global.personal and playerGUID == dstGUID) then -- Player events
-		if damageSpellEvents[clueevent] or (healSpellEvents[clueevent] and self.db.global.heals) then
-			local spellId, spellName, school, amount, overkill, _, _, _, _, critical, _, _ = ...
-			self:DamageEvent(dstGUID, spellName, amount, overkill, school, critical, spellId, healSpellEvents[clueevent] and self.db.global.heals)
-		elseif clueevent == "SWING_DAMAGE" then
-			local amount, overkill, _, _, _, _, critical, _, _ = ...
-			self:DamageEvent(dstGUID, AutoAttack, amount, overkill, 1, critical, 6603)
-		elseif missedSpellEvents[clueevent] then
-			local spellId, spellName, school, missType = ...
-			self:MissEvent(dstGUID, spellName, missType, spellId)
-		elseif clueevent == "SWING_MISSED" then
-			self:MissEvent(dstGUID, AutoAttack, dstGUID == playerGUID and AutoAttack or ..., 6603)
-		end
-	elseif band(srcFlags, BITMASK_PETS) ~= 0 and band(srcFlags, BITMASK_MINE) ~= 0 then -- Pet/Guardian events
-		if damageSpellEvents[clueevent] or (healSpellEvents[clueevent] and self.db.global.heals) then
-			local spellId, spellName, _, amount, overkill, _, _, _, _, critical, _, _ = ...
-			self:DamageEvent(dstGUID, spellName, amount, overkill, "pet", critical, spellId, healSpellEvents[clueevent] and self.db.global.heals)
-		elseif clueevent == "SWING_DAMAGE" then
-			local amount, overkill, _, _, _, _, critical, _, _ = ...
-			self:DamageEvent(dstGUID, AutoAttack, amount, overkill, "pet", critical, 6603)
-		end
-	end
+        local targetGUID = dstGUID
+        local plate = targetGUID == playerGUID and UIParent or (targetGUID and guidToPlate[targetGUID])
+        if playerGUID ~= targetGUID and not plate then
+                return
+        end
+
+        if playerGUID == srcGUID or (self.db.global.personal and playerGUID == dstGUID) then -- Player events
+                if damageSpellEvents[clueevent] or (healSpellEvents[clueevent] and self.db.global.heals) then
+                        local spellId, spellName, school, amount, overkill, _, _, _, _, critical, _, _ = ...
+                        self:DamageEvent(dstGUID, plate, spellName, amount, overkill, school, critical, spellId, healSpellEvents[clueevent] and self.db.global.heals)
+                elseif clueevent == "SWING_DAMAGE" then
+                        local amount, overkill, _, _, _, _, critical, _, _ = ...
+                        self:DamageEvent(dstGUID, plate, AutoAttack, amount, overkill, 1, critical, 6603)
+                elseif missedSpellEvents[clueevent] then
+                        local spellId, spellName, school, missType = ...
+                        self:MissEvent(dstGUID, plate, spellName, missType, spellId)
+                elseif clueevent == "SWING_MISSED" then
+                        self:MissEvent(dstGUID, plate, AutoAttack, dstGUID == playerGUID and AutoAttack or ..., 6603)
+                end
+        elseif band(srcFlags, BITMASK_PETS) ~= 0 and band(srcFlags, BITMASK_MINE) ~= 0 then -- Pet/Guardian events
+                if damageSpellEvents[clueevent] or (healSpellEvents[clueevent] and self.db.global.heals) then
+                        local spellId, spellName, _, amount, overkill, _, _, _, _, critical, _, _ = ...
+                        self:DamageEvent(dstGUID, plate, spellName, amount, overkill, "pet", critical, spellId, healSpellEvents[clueevent] and self.db.global.heals)
+                elseif clueevent == "SWING_DAMAGE" then
+                        local amount, overkill, _, _, _, _, critical, _, _ = ...
+                        self:DamageEvent(dstGUID, plate, AutoAttack, amount, overkill, "pet", critical, 6603)
+                end
+        end
 end
 
 -------------
@@ -581,9 +651,9 @@ end
 local numDamageEvents = 0
 local lastDamageEventTime
 local runningAverageDamageEvents = 0
-function NameplateSCT:DamageEvent(guid, spellName, amount, overkill, school, crit, spellId, heals)
-	local text, animation, pow, size, alpha
-	local autoattack = spellName == AutoAttack or spellName == AutoShot or spellName == "pet"
+function NameplateSCT:DamageEvent(guid, plate, spellName, amount, overkill, school, crit, spellId, heals)
+        local text, animation, pow, size, alpha
+        local autoattack = spellName == AutoAttack or spellName == AutoShot or spellName == "pet"
 
 	-- select an animation
 	if (autoattack and crit) then
@@ -600,8 +670,12 @@ function NameplateSCT:DamageEvent(guid, spellName, amount, overkill, school, cri
 		pow = false
 	end
 
-	-- skip if this damage event is disabled
-	if (animation == "disabled") then return end
+        -- skip if this damage event is disabled
+        if (animation == "disabled") then return end
+
+        if not plate then
+                return
+        end
 
 	local isTarget = (UnitGUID("target") == guid)
 
@@ -675,16 +749,20 @@ text = self:ColorText(text, guid, playerGUID, school, spellName, heals)
 		size = 5
 	end
 
-	if (overkill > 0 and self.db.global.displayOverkill) then
-		self:DisplayTextOverkill(guid, text, size, alpha, animation, spellId, pow, spellName)
-	else
-		self:DisplayText(guid, text, size, alpha, animation, spellId, pow, spellName)
-	end
+        if (overkill > 0 and self.db.global.displayOverkill) then
+                self:DisplayTextOverkill(guid, plate, text, size, alpha, animation, spellId, pow, spellName)
+        else
+                self:DisplayText(guid, plate, text, size, alpha, animation, spellId, pow, spellName)
+        end
 end
 
-function NameplateSCT:MissEvent(guid, spellName, missType, spellId)
-	local text, animation, pow, size, alpha, color
-	local isTarget = (UnitGUID("target") == guid)
+function NameplateSCT:MissEvent(guid, plate, spellName, missType, spellId)
+        local text, animation, pow, size, alpha, color
+        local isTarget = (UnitGUID("target") == guid)
+
+        if not plate then
+                return
+        end
 
 	if playerGUID ~= guid then
 		animation = self.db.global.animations.miss
@@ -717,7 +795,7 @@ function NameplateSCT:MissEvent(guid, spellName, missType, spellId)
 	text = MISS_EVENT_STRINGS[missType] or ACTION_SPELL_MISSED_MISS
 	text = "\124cff" .. color .. text .. "\124r"
 
-	self:DisplayText(guid, text, size, alpha, animation, spellId, pow, spellName)
+	self:DisplayText(guid, plate, text, size, alpha, animation, spellId, pow, spellName)
 end
 
 function NameplateSCT:ColorText(startingText, guid, playerGUID, school, spellName, heals)
@@ -747,18 +825,21 @@ function NameplateSCT:ColorText(startingText, guid, playerGUID, school, spellNam
 end
 
 function NameplateSCT:GetNameplate(guid)
-	local plate = (guid == playerGUID) and "player" or nil
-	if not plate and UnitExists("target") and not UnitIsUnit("target", "player") and UnitGUID("target") == guid then
-		plate = LibNameplates:GetTargetNameplate()
+	if not guid then
+		return nil
 	end
-	return plate or LibNameplates:GetNameplateByGUID(guid)
+
+	if guid == playerGUID then
+		return UIParent
+	end
+
+	return guidToPlate[guid]
 end
 
-function NameplateSCT:DisplayText(guid, text, size, alpha, animation, spellId, pow, spellName)
+function NameplateSCT:DisplayText(guid, plate, text, size, alpha, animation, spellId, pow, spellName)
 	local fontString, icon
 
-	local nameplate = self:GetNameplate(guid)
-	if not nameplate then return end
+	if not plate then return end
 
 	fontString = getFontString()
 
@@ -766,6 +847,30 @@ function NameplateSCT:DisplayText(guid, text, size, alpha, animation, spellId, p
 	fontString.NSCTText = finalText
 	fontString:SetText(finalText)
 
+	local holder = fontString:GetParent()
+	holder:ClearAllPoints()
+	holder:SetParent(plate)
+
+	if plate.GetFrameStrata then
+		holder:SetFrameStrata(plate:GetFrameStrata())
+	end
+	if plate.GetFrameLevel then
+		holder:SetFrameLevel(plate:GetFrameLevel() + 5)
+	end
+
+	local baseXOffset, baseYOffset
+	if guid == playerGUID then
+		baseXOffset = self.db.global.xOffsetPersonal or 0
+		baseYOffset = self.db.global.yOffsetPersonal or 0
+	else
+		baseXOffset = self.db.global.xOffset or 0
+		baseYOffset = self.db.global.yOffset or 0
+	end
+
+	holder:SetPoint("CENTER", plate, "CENTER", baseXOffset, baseYOffset)
+	fontString:ClearAllPoints()
+	fontString:SetPoint("CENTER", holder, "CENTER", 0, 0)
+	fontString.anchorPlate = plate
 	fontString.NSCTFontSize = size
 	fontString:SetFont(getFontPath(self.db.global.font), fontString.NSCTFontSize, self.db.global.fontFlag)
 	if self.db.global.textShadow then
@@ -798,13 +903,13 @@ function NameplateSCT:DisplayText(guid, text, size, alpha, animation, spellId, p
 	elseif fontString.icon then
 		fontString.icon:Hide()
 	end
-	self:Animate(fontString, nameplate, self.db.global.animations.animationspeed, animation)
+	self:Animate(fontString, holder, self.db.global.animations.animationspeed, animation)
 end
 
-function NameplateSCT:DisplayTextOverkill(guid, text, size, alpha, animation, spellId, pow, spellName)
+function NameplateSCT:DisplayTextOverkill(guid, plate, text, size, alpha, animation, spellId, pow, spellName)
 	local fontString, icon
 
-	local nameplate = "player"
+	if not plate then return end
 
 	fontString = getFontString()
 
@@ -812,6 +917,30 @@ function NameplateSCT:DisplayTextOverkill(guid, text, size, alpha, animation, sp
 	fontString.NSCTText = finalText
 	fontString:SetText(finalText)
 
+	local holder = fontString:GetParent()
+	holder:ClearAllPoints()
+	holder:SetParent(plate)
+
+	if plate.GetFrameStrata then
+		holder:SetFrameStrata(plate:GetFrameStrata())
+	end
+	if plate.GetFrameLevel then
+		holder:SetFrameLevel(plate:GetFrameLevel() + 5)
+	end
+
+	local baseXOffset, baseYOffset
+	if guid == playerGUID then
+		baseXOffset = self.db.global.xOffsetPersonal or 0
+		baseYOffset = self.db.global.yOffsetPersonal or 0
+	else
+		baseXOffset = self.db.global.xOffset or 0
+		baseYOffset = self.db.global.yOffset or 0
+	end
+
+	holder:SetPoint("CENTER", plate, "CENTER", baseXOffset, baseYOffset)
+	fontString:ClearAllPoints()
+	fontString:SetPoint("CENTER", holder, "CENTER", 0, 0)
+	fontString.anchorPlate = plate
 	fontString.NSCTFontSize = size
 	fontString:SetFont(getFontPath(self.db.global.font), fontString.NSCTFontSize, self.db.global.fontFlag)
 	if self.db.global.textShadow then
@@ -844,7 +973,7 @@ function NameplateSCT:DisplayTextOverkill(guid, text, size, alpha, animation, sp
 	elseif fontString.icon then
 		fontString.icon:Hide()
 	end
-	self:Animate(fontString, nameplate, self.db.global.animations.animationspeed, animation)
+	self:Animate(fontString, holder, self.db.global.animations.animationspeed, animation)
 end
 
 -------------
