@@ -95,7 +95,6 @@ local defaultFont = SharedMedia:IsValid("font", "Bazooka") and "Bazooka" or "Fri
 local defaults = {
 	global = {
 		enabled = true,
-		displayOverkill = false,
 		xOffset = 0,
 		yOffset = 0,
 		heals = false,
@@ -637,10 +636,6 @@ function NameplateSCT:DamageEvent(guid, spellName, amount, overkill, school, cri
 	end
 
 	-- color text
-	if (overkill > 0) then
-		text = text.." Overkill("..overkill..")"
-	end
-
 	text = self:ColorText(text, guid, playerGUID, school, spellName, heals)
 
 	-- shrink small hits
@@ -679,11 +674,7 @@ function NameplateSCT:DamageEvent(guid, spellName, amount, overkill, school, cri
 		size = 5
 	end
 
-	if (overkill > 0 and self.db.global.displayOverkill) then
-		self:DisplayTextOverkill(guid, text, size, alpha, animation, spellId, pow, spellName)
-	else
-		self:DisplayText(guid, text, size, alpha, animation, spellId, pow, spellName)
-	end
+	self:DisplayText(guid, text, size, alpha, animation, spellId, pow, spellName)
 end
 
 function NameplateSCT:MissEvent(guid, spellName, missType, spellId)
@@ -804,51 +795,6 @@ function NameplateSCT:DisplayText(guid, text, size, alpha, animation, spellId, p
 	self:Animate(fontString, nameplate, self.db.global.animations.animationspeed, animation)
 end
 
-function NameplateSCT:DisplayTextOverkill(guid, text, size, alpha, animation, spellId, pow, spellName)
-	local fontString, icon
-
-	local nameplate = "player"
-
-	fontString = getFontString()
-
-	fontString.NSCTText = text
-	fontString:SetText(fontString.NSCTText)
-
-	fontString.NSCTFontSize = size
-	fontString:SetFont(getFontPath(self.db.global.font), fontString.NSCTFontSize, self.db.global.fontFlag)
-	if self.db.global.textShadow then
-		fontString:SetShadowOffset(1, -1)
-	else
-		fontString:SetShadowOffset(0, 0)
-	end
-	fontString.startHeight = fontString:GetStringHeight()
-	fontString.pow = pow
-
-	if (fontString.startHeight <= 0) then
-		fontString.startHeight = 5;
-	end
-
-	fontString.guid = guid;
-
-	local _, _, texture = GetSpellInfo(spellId or spellName)
-	if not texture and spellName then
-		_, _, texture = GetSpellInfo(spellName)
-	end
-
-	if self.db.global.showIcon and texture then
-		icon = fontString.icon
-		icon:Show()
-		icon:SetTexture(texture)
-		icon:SetSize(size * self.db.global.iconScale, size * self.db.global.iconScale)
-		icon:SetPoint(inversePositions[self.db.global.iconPosition], fontString, self.db.global.iconPosition, self.db.global.xOffsetIcon, self.db.global.yOffsetIcon)
-		icon:SetAlpha(alpha)
-		fontString.icon = icon
-	elseif fontString.icon then
-		fontString.icon:Hide()
-	end
-	self:Animate(fontString, nameplate, self.db.global.animations.animationspeed, animation)
-end
-
 -------------
 -- OPTIONS --
 -------------
@@ -912,12 +858,6 @@ local menu = {
 				return (not NameplateSCT.db.global.personal or not NameplateSCT.db.global.enabled)
 			end,
 			order = 7
-		},
-		displayOverkill = {
-			type = 'toggle',
-			name = L["Display Overkill"],
-			desc = L["Display your overkill for a target over your own nameplate"],
-			order = 8,
 		},
 		animations = {
 			type = "group",
