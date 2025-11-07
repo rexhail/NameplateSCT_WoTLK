@@ -766,8 +766,9 @@ function NameplateSCT:DisplayText(guid, text, size, alpha, animation, spellId, p
 
 	fontString = getFontString()
 
-	fontString.NSCTText = text
-	fontString:SetText(fontString.NSCTText)
+	local finalText = tostring(text or ""):gsub("%s*OVERKILL%([^)]*%)", "")
+	fontString.NSCTText = finalText
+	fontString:SetText(finalText)
 
 	fontString.NSCTFontSize = size
 	fontString:SetFont(getFontPath(self.db.global.font), fontString.NSCTFontSize, self.db.global.fontFlag)
@@ -811,8 +812,9 @@ function NameplateSCT:DisplayTextOverkill(guid, text, size, alpha, animation, sp
 
 	fontString = getFontString()
 
-	fontString.NSCTText = text
-	fontString:SetText(fontString.NSCTText)
+	local finalText = tostring(text or ""):gsub("%s*OVERKILL%([^)]*%)", "")
+	fontString.NSCTText = finalText
+	fontString:SetText(finalText)
 
 	fontString.NSCTFontSize = size
 	fontString:SetFont(getFontPath(self.db.global.font), fontString.NSCTFontSize, self.db.global.fontFlag)
